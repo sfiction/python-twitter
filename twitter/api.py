@@ -145,6 +145,7 @@ class Api(object):
     _API_REALM = 'Twitter API'
 
     def __init__(self,
+                 req=None,
                  consumer_key=None,
                  consumer_secret=None,
                  access_token_key=None,
@@ -166,6 +167,8 @@ class Api(object):
         """Instantiate a new twitter.Api object.
 
         Args:
+          req (str):
+            Twitter req header from browser.
           consumer_key (str):
             Your Twitter user's consumer_key.
           consumer_secret (str):
@@ -237,6 +240,7 @@ class Api(object):
         if timeout and timeout < 30:
             warnings.warn("Warning: The Twitter streaming API sends 30s keepalives, the given timeout is shorter!")
         self._timeout = timeout
+        self._headers = None
         self.__auth = None
 
         self._InitializeRequestHeaders(request_headers)
@@ -271,12 +275,23 @@ class Api(object):
                 "requests to the Twitter API when uploading videos. You are "
                 "strongly advised to increase it above 16384"))
 
-        if (consumer_key and not
-           (application_only_auth or all([access_token_key, access_token_secret]))):
-            raise TwitterError({'message': "Missing oAuth Consumer Key or Access Token"})
+        self._requests_kwargs = {
+            'timeout': self._timeout,
+            'proxies': self.proxies,
+        }
+        if req:
+            data = list(filter(None, map(str.strip, req.split('\n'))))
+            self._headers = {key: value for key, _, value in [line.partition(': ') for line in data[1: ]]}
+            self._headers['Accept-Encoding'] = 'gzip, deflate'
+            self._requests_kwargs['headers'] = self._headers
+        else:
+            if (consumer_key and not
+              (application_only_auth or all([access_token_key, access_token_secret]))):
+                raise TwitterError({'message': "Missing oAuth Consumer Key or Access Token"})
 
-        self.SetCredentials(consumer_key, consumer_secret, access_token_key, access_token_secret,
-                            application_only_auth)
+            self.SetCredentials(consumer_key, consumer_secret, access_token_key, access_token_secret,
+                                application_only_auth)
+            self._reqeuests_kwargs['auth'] = self.__auth
 
         if debugHTTP:
             try:
@@ -4953,7 +4968,7 @@ class Api(object):
             A JSON object.
         """
         if enforce_auth:
-            if not self.__auth:
+            if not self.__auth and not self._headers:
                 raise TwitterError("The twitter.Api instance must be authenticated.")
 
             if url and self.sleep_on_rate_limit:
@@ -4974,20 +4989,20 @@ class Api(object):
             if data:
                 if 'media_ids' in data:
                     url = self._BuildUrl(url, extra_params={'media_ids': data['media_ids']})
-                    resp = requests.post(url, data=data, auth=self.__auth, timeout=self._timeout, proxies=self.proxies)
+                    resp = requests.post(url, data=data, **self._requests_kwargs)
                 elif 'media' in data:
-                    resp = requests.post(url, files=data, auth=self.__auth, timeout=self._timeout, proxies=self.proxies)
+                    resp = requests.post(url, files=data, **self._requests_kwargs)
                 else:
-                    resp = requests.post(url, data=data, auth=self.__auth, timeout=self._timeout, proxies=self.proxies)
+                    resp = requests.post(url, data=data, **self._requests_kwargs)
             elif json:
-                resp = requests.post(url, json=json, auth=self.__auth, timeout=self._timeout, proxies=self.proxies)
+                resp = requests.post(url, json=json, **self._requests_kwargs)
             else:
                 resp = 0  # POST request, but without data or json
 
         elif verb == 'GET':
             data['tweet_mode'] = self.tweet_mode
             url = self._BuildUrl(url, extra_params=data)
-            resp = requests.get(url, auth=self.__auth, timeout=self._timeout, proxies=self.proxies)
+            resp = requests.get(url, **self._requests_kwargs)
 
         else:
             resp = 0  # if not a POST or GET request
